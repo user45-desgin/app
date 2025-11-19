@@ -6,9 +6,14 @@ on:
       - main
       - master
   workflow_dispatch:
+    inputs:
+      sync-argocd:
+        description: 'Trigger ArgoCD sync?'
+        required: false
+        default: 'no'
 
 env:
-  IMAGE_NAME: proj8-eks-app        # <--- adjust repository name if needed
+  IMAGE_NAME: proj8-eks-app        # Adjust repository name if needed
   IMAGE_PORT: 5000
 
 jobs:
@@ -61,40 +66,37 @@ jobs:
     needs: build-and-push
     if: always()
     steps:
-      - name: Checkout repo (for small helper)
+      - name: Checkout repo (for helper)
         uses: actions/checkout@v4
 
-      - name: Install git (if not present) and jq, yq
+      - name: Install git, jq
         run: |
           sudo apt-get update && sudo apt-get install -y git jq
-          # yq used for YAML editing (optional); using python/sed here to keep simple
+
       - name: Clone gitops repo
         env:
           GITOPS_REPO: ${{ secrets.GITOPS_REPO }}
           GITOPS_BRANCH: main
+          GITOPS_REPO_TOKEN: ${{ secrets.GITOPS_REPO_TOKEN }}
         run: |
-          # clone the target repo using token
-          git clone https://x-access-token:${{ secrets.GITOPS_REPO_TOKEN }}@github.com/${GITOPS_REPO}.git /tmp/gitops
+          git clone https://x-access-token:${GITOPS_REPO_TOKEN}@github.com/${GITOPS_REPO}.git /tmp/gitops
           cd /tmp/gitops
           git checkout $GITOPS_BRANCH || true
           echo "Cloned gitops repo root: $(pwd)"
+
       - name: Update image reference in gitops manifests
         env:
           IMAGE_URI: ${{ env.IMAGE_URI }}
         run: |
           cd /tmp/gitops
-          # sample: update image in deployment manifest under flask-app/deployment.yaml
-          # this will replace the image line. Adjust path/pattern as per your manifest.
           FILE=flask-app/deployment.yaml
           if [ -f "$FILE" ]; then
             echo "Updating $FILE -> image: $IMAGE_URI"
-            # naive sed replace - replace the image: line
-            # handles patterns like: image: something:tag
             sed -i -E "s|image: .*|image: ${IMAGE_URI}|g" "$FILE"
             git add "$FILE"
             git commit -m "ci: bump image to ${IMAGE_URI}" || echo "no changes to commit"
           else
-            echo "$FILE not found — please update this workflow to match your manifest path"
+            echo "$FILE not found — please update workflow to match your manifest path"
           fi
 
       - name: Push gitops update
@@ -104,12 +106,11 @@ jobs:
           git config user.name "${{ secrets.GIT_USER_NAME }}"
           git push origin HEAD:${{ secrets.GITOPS_BRANCH }}
 
-      - name: (optional) Trigger ArgoCD sync via API
-        if: ${{ secrets.ARGOCD_SERVER && secrets.ARGOCD_TOKEN }}
+      - name: Optional Trigger ArgoCD sync
+        if: github.event.inputs.sync-argocd == 'yes' && secrets.ARGOCD_SERVER && secrets.ARGOCD_TOKEN
         env:
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
           ARGOCD_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
         run: |
-          # Trigger ArgoCD application sync (app name = flask-app)
           curl -k -s -X POST -H "Authorization: Bearer ${ARGOCD_TOKEN}" \
             "${ARGOCD_SERVER}/api/v1/applications/flask-app/sync" | jq .
