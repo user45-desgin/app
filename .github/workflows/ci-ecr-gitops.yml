@@ -13,7 +13,7 @@ on:
         default: 'no'
 
 env:
-  IMAGE_NAME: proj8-eks-app        # Adjust repository name if needed
+  IMAGE_NAME: proj8-eks-app
   IMAGE_PORT: 5000
 
 jobs:
@@ -66,7 +66,7 @@ jobs:
     needs: build-and-push
     if: always()
     steps:
-      - name: Checkout repo (for helper)
+      - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Install git, jq
@@ -96,7 +96,7 @@ jobs:
             git add "$FILE"
             git commit -m "ci: bump image to ${IMAGE_URI}" || echo "no changes to commit"
           else
-            echo "$FILE not found — please update workflow to match your manifest path"
+            echo "$FILE not found — skipping update"
           fi
 
       - name: Push gitops update
@@ -107,10 +107,15 @@ jobs:
           git push origin HEAD:${{ secrets.GITOPS_BRANCH }}
 
       - name: Optional Trigger ArgoCD sync
-        if: github.event.inputs.sync-argocd == 'yes' && secrets.ARGOCD_SERVER && secrets.ARGOCD_TOKEN
+        if: github.event.inputs.sync-argocd == 'yes'
         env:
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
           ARGOCD_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
         run: |
+          if [ -z "${ARGOCD_SERVER}" ] || [ -z "${ARGOCD_TOKEN}" ]; then
+            echo "ArgoCD secrets not set, skipping sync."
+            exit 0
+          fi
+
           curl -k -s -X POST -H "Authorization: Bearer ${ARGOCD_TOKEN}" \
             "${ARGOCD_SERVER}/api/v1/applications/flask-app/sync" | jq .
